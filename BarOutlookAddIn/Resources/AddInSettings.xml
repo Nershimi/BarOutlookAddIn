@@ -1,0 +1,13 @@
+<Settings>
+  <NB>
+    <NB_Server_Address>VCDC\BAR</NB_Server_Address>
+    <NB_Archive_Path>T:\m9\archiv\ol</NB_Archive_Path>
+    <NB_DB_Name>bar_kks_nb</NB_DB_Name>
+    <SqlUserName>BARUSER</SqlUserName>
+    <SqlPassword>COKE</SqlPassword>
+  </NB>
+  <DefaultSystem>NB</DefaultSystem>
+  <DefaultEntity>בקשות</DefaultEntity>
+  <numerator>false</numerator>
+  <Shomron>false</Shomron>
+</Settings>

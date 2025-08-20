@@ -34,10 +34,10 @@
             // tab1
             // 
             this.tab1.ControlId.ControlIdType = Microsoft.Office.Tools.Ribbon.RibbonControlIdType.Office;
-            this.tab1.ControlId.OfficeId = "TabMail"; // מצביע לטאב הבית של Outlook
-            this.tab1.Label = null;
-            this.tab1.Name = "homeTab";
-            this.tab1.Groups.Add(this.group1); // חשוב מאוד להוסיף את הקבוצה לטאב
+            this.tab1.ControlId.OfficeId = "TabMail";
+            this.tab1.Groups.Add(this.group1);
+            this.tab1.Label = "TabMail";
+            this.tab1.Name = "tab1";
             // 
             // group1
             // 
@@ -57,7 +57,8 @@
             // SaveEmailRibbon
             // 
             this.Name = "SaveEmailRibbon";
-            this.RibbonType = "Microsoft.Outlook.Explorer, Microsoft.Outlook.Mail.Read, Microsoft.Outlook.Mail.Compose";
+            this.RibbonType = "Microsoft.Outlook.Explorer, Microsoft.Outlook.Mail.Read, Microsoft.Outlook.Mail.C" +
+    "ompose";
             this.Tabs.Add(this.tab1);
             this.Load += new Microsoft.Office.Tools.Ribbon.RibbonUIEventHandler(this.SaveEmailRibbon_Load);
             this.tab1.ResumeLayout(false);
@@ -65,6 +66,7 @@
             this.group1.ResumeLayout(false);
             this.group1.PerformLayout();
             this.ResumeLayout(false);
+
         }
 
         #endregion

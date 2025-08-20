@@ -1,0 +1,13 @@
+<Settings>
+  <NB>
+    <NB_Server_Address>NAOR-COMP\SQL2017</NB_Server_Address>
+    <NB_Archive_Path>D:\bar\archive\ol</NB_Archive_Path>
+    <NB_DB_Name>BAR_BNS_NB</NB_DB_Name>
+    <SqlUserName>BARUSER</SqlUserName>
+    <SqlPassword>COKE</SqlPassword>
+  </NB>
+  <DefaultSystem>NB</DefaultSystem>
+  <DefaultEntity>בקשות</DefaultEntity>
+  <numerator>false</numerator>
+  <Shomron>false</Shomron>
+</Settings>
