@@ -1,9 +1,8 @@
 ﻿using System;
-using System.Data.SqlClient;
 using System.IO;
-using System.Text;
-using System.Windows.Forms;
 using System.Xml.Linq;
+using Office = Microsoft.Office.Core;
+
 
 namespace BarOutlookAddIn
 {
@@ -15,11 +14,16 @@ namespace BarOutlookAddIn
         private void ThisAddIn_Startup(object sender, EventArgs e)
         {
             // 1) Init log folder FIRST
-            DevDiag.ConfigureLogFolder(@"C:\bar\logs");
+            DevDiag.ConfigureLogFolder(@"C:\bar\m9");
             DevDiag.Log("Startup: entered. Using log at: " + DevDiag.CurrentLogPath);
 
             // 2) Only then start the rest, so early logs ייכנסו לנתיב שבחרת
             ShowDbConnectionToastIfNeeded();
+        }
+        protected override Office.IRibbonExtensibility CreateRibbonExtensibilityObject()
+        {
+            try { DevDiag.Log("CreateRibbonExtensibilityObject: returning AttachmentContextMenuRibbon"); } catch { }
+            return new AttachmentContextMenuRibbon();
         }
 
 

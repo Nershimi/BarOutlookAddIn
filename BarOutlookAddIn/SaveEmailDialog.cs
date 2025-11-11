@@ -4,11 +4,51 @@ using System.Windows.Forms;
 using System.Collections.Generic;
 using BarOutlookAddIn.Helpers;
 // הסר את using BarOutlookAddIn.App_Code; כדי למנוע דו-משמעות אם יש גם שם AddInConfig
+using Outlook = Microsoft.Office.Interop.Outlook;
 
 namespace BarOutlookAddIn
 {
     public partial class SaveEmailDialog : Form
     {
+        // ===== חדש: קונטקסט שמגיע מהריבון =====
+        private Outlook.MailItem _mailFromRibbon;
+        private List<int> _preselectedAttachmentIndices = new List<int>();
+        private List<string> _preselectedAttachmentFileNames = new List<string>();
+
+        // חשיפה לקריאה מבחוץ (לוגיקת השמירה יכולה להשתמש בזה)
+        public Outlook.MailItem Mail { get { return _mailFromRibbon; } set { _mailFromRibbon = value; } }
+        public Outlook.MailItem MailItem { get { return _mailFromRibbon; } set { _mailFromRibbon = value; } }
+        public bool UseCustomFileName => chkCustomFileName.Checked;
+        public string CustomFileName => txtCustomFileName.Text?.Trim();
+
+        public IReadOnlyList<int> PreselectedAttachmentIndices
+        {
+            get { return _preselectedAttachmentIndices.AsReadOnly(); }
+            set
+            {
+                _preselectedAttachmentIndices = value != null ? new List<int>(value) : new List<int>();
+            }
+        }
+
+        // שם נוסף כדי להתאים לשמות אפשריים בקוד חיצוני
+        public IReadOnlyList<int> SelectedAttachmentIndices
+        {
+            get { return _preselectedAttachmentIndices.AsReadOnly(); }
+            set
+            {
+                _preselectedAttachmentIndices = value != null ? new List<int>(value) : new List<int>();
+            }
+        }
+
+        public IReadOnlyList<string> PreselectedAttachmentFileNames
+        {
+            get { return _preselectedAttachmentFileNames.AsReadOnly(); }
+            set
+            {
+                _preselectedAttachmentFileNames = value != null ? new List<string>(value) : new List<string>();
+            }
+        }
+
         // enum שהריבון מצפה לו
         public enum SaveOption { None, SaveEmail, SaveAttachments, SaveAttachmentsOnly = SaveAttachments }
         public SaveOption SelectedOption { get; private set; } = SaveOption.None;
@@ -35,7 +75,8 @@ namespace BarOutlookAddIn
         // גישה אחידה לקומבו קטגוריה (בין comboBoxCategory ל-comboCategory אם נוצר alias ב-Designer)
         private ComboBox CategoryCombo
         {
-            get { return (object)comboBoxCategory != null ? comboBoxCategory : comboCategory; }
+            // simplified and clearer null-coalescing (was using a cast expression)
+            get { return comboBoxCategory ?? comboCategory; }
         }
 
         public string SelectedCategory
@@ -48,6 +89,7 @@ namespace BarOutlookAddIn
             get { return txtRequestNumber != null ? txtRequestNumber.Text.Trim() : ""; }
         }
 
+        // ===== קונסטרקטור קיים (נשאר ללא שינוי פונקציונלי) =====
         public SaveEmailDialog()
         {
             DevDiag.Log("Dialog: ctor ENTER");
@@ -72,6 +114,63 @@ namespace BarOutlookAddIn
             {
                 DevDiag.Log("Dialog: ctor EX " + ex.Message);
             }
+        }
+
+        // ===== חדש: קונסטרקטור עם Mail + אינדקסים של מצורפים =====
+        public SaveEmailDialog(Outlook.MailItem mail, IReadOnlyList<int> preselectedAttachmentIndices)
+        {
+            DevDiag.Log("Dialog: ctor(mail,indices) ENTER");
+            InitializeComponent();
+
+            _mailFromRibbon = mail;
+            _preselectedAttachmentIndices = preselectedAttachmentIndices != null
+                ? new List<int>(preselectedAttachmentIndices)
+                : new List<int>();
+
+            // עקוב אחרי שינוי ישות
+            if (comboBoxEntity != null)
+                comboBoxEntity.SelectedIndexChanged += comboBoxEntity_SelectedIndexChanged;
+
+            try
+            {
+                TryLoadConfigFromSavedPath();
+                ApplyConfigToUI();
+                RestoreLastCategory();
+                ApplyDefaultEntityToUI();
+                DevDiag.Log("Dialog: about to LoadEntitiesFromDb");
+                LoadEntitiesFromDb();
+                UpdateFolderLabel();
+                DevDiag.Log("Dialog: ctor(mail,indices) EXIT OK");
+            }
+            catch (Exception ex)
+            {
+                DevDiag.Log("Dialog: ctor(mail,indices) EX " + ex.Message);
+            }
+        }
+
+        // ===== חדש: מתודות עזר לידידותיות-רפלקשן (אם פותחים באמצעות ctor דיפולטי) =====
+        public void SetContext(Outlook.MailItem mail, IReadOnlyList<int> indices)
+        {
+            _mailFromRibbon = mail;
+            _preselectedAttachmentIndices = indices != null ? new List<int>(indices) : new List<int>();
+            DevDiag.Log("Dialog: SetContext(mail,indices) set; indices=" + _preselectedAttachmentIndices.Count);
+        }
+
+        public void SetContext(Outlook.MailItem mail, IReadOnlyList<int> indices, IReadOnlyList<string> fileNames)
+        {
+            SetContext(mail, indices);
+            _preselectedAttachmentFileNames = fileNames != null ? new List<string>(fileNames) : new List<string>();
+            DevDiag.Log("Dialog: SetContext(mail,indices,fileNames) set; files=" + _preselectedAttachmentFileNames.Count);
+        }
+
+        public void InitializeWithMailAndAttachments(Outlook.MailItem mail, IReadOnlyList<int> indices)
+        {
+            SetContext(mail, indices);
+        }
+
+        public void InitializeWithMailAndAttachments(Outlook.MailItem mail, IReadOnlyList<int> indices, IReadOnlyList<string> fileNames)
+        {
+            SetContext(mail, indices, fileNames);
         }
 
         // ---------------- לוגיקה פנימית ----------------
@@ -169,9 +268,16 @@ namespace BarOutlookAddIn
                 }
                 if (!found)
                 {
-                    comboBoxEntity.Items.Add(defEntity);
-                    comboBoxEntity.SelectedItem = defEntity;
-                    DevDiag.Log("Dialog: ApplyDefaultEntityToUI default '" + defEntity + "' not found; added and selected");
+                    // add a temporary EntityInfo item instead of raw string, so SelectedEntityInfo stays usable
+                    var tmp = new EntityInfo
+                    {
+                        Name = defEntity,
+                        Definement = 0,
+                        SystemType = MapDefaultHebrewToSystemType(defEntity) ?? string.Empty
+                    };
+                    comboBoxEntity.Items.Add(tmp);
+                    comboBoxEntity.SelectedItem = tmp;
+                    DevDiag.Log("Dialog: ApplyDefaultEntityToUI default '" + defEntity + "' not found; added temporary EntityInfo and selected");
                 }
             }
             catch (Exception ex)
@@ -227,12 +333,45 @@ namespace BarOutlookAddIn
         // כפתור: "שמור את המייל כולו"
         private void btnSaveEmail_Click(object sender, EventArgs e)
         {
+            DevDiag.Log($"Dialog: btnSaveEmail_Click ENTER - UseCustom?={chkCustomFileName.Checked}, RawName='{txtCustomFileName.Text}'");
+
+            if (UseCustomFileName)
+            {
+                var raw = CustomFileName;
+                if (string.IsNullOrWhiteSpace(raw))
+                {
+                    MessageBox.Show("אנא הקלד שם קובץ.", "ולידציה", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    DevDiag.Log("Dialog: validation fail - empty custom file name");
+                    return;
+                }
+
+                // מסיר סיומת אם המשתמש כתב, ומנקה תווים אסורים
+                var baseName = System.IO.Path.GetFileNameWithoutExtension(raw);
+                baseName = CleanFileName(baseName);
+
+                if (string.IsNullOrWhiteSpace(baseName))
+                {
+                    MessageBox.Show("שם הקובץ שהוזן אינו תקין לאחר ניקוי. אנא נסה שם אחר.", "ולידציה", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    DevDiag.Log("Dialog: sanitized name empty");
+                    return;
+                }
+
+                if (!string.Equals(txtCustomFileName.Text, baseName, StringComparison.Ordinal))
+                {
+                    txtCustomFileName.Text = baseName;
+                    DevDiag.Log($"Dialog: sanitized custom name -> '{baseName}'");
+                }
+            }
+
             var ent = this.SelectedEntityInfo;
             DevDiag.Log("Dialog: btnSaveEmail_Click with entity -> " +
                 (ent != null ? (ent.Name + " | Def=" + ent.Definement + " | Sys=" + ent.SystemType) : "<null>"));
 
             SelectedOption = SaveOption.SaveEmail;
             TryPersistLastCategory();
+
+            DevDiag.Log($"Dialog: btnSaveEmail_Click EXIT - SelectedOption={SelectedOption}, UseCustom?={chkCustomFileName.Checked}, FinalName='{txtCustomFileName.Text}'");
+
             this.DialogResult = DialogResult.OK;
             this.Close();
         }
@@ -240,15 +379,50 @@ namespace BarOutlookAddIn
         // כפתור: "שמור רק קבצים מצורפים"
         private void btnSaveAttachments_Click(object sender, EventArgs e)
         {
+            DevDiag.Log($"Dialog: btnSaveAttachments_Click ENTER - UseCustom?={chkCustomFileName.Checked}, RawName='{txtCustomFileName.Text}', preselectedCount={_preselectedAttachmentIndices?.Count ?? 0}");
+
+            if (UseCustomFileName)
+            {
+                var raw = CustomFileName;
+                if (string.IsNullOrWhiteSpace(raw))
+                {
+                    MessageBox.Show("אנא הקלד שם קובץ.", "ולידציה", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    DevDiag.Log("Dialog: validation fail - empty custom file name (attachments)");
+                    return;
+                }
+
+                // מסיר סיומת אם המשתמש כתב, ומנקה תווים אסורים
+                var baseName = System.IO.Path.GetFileNameWithoutExtension(raw);
+                baseName = CleanFileName(baseName);
+
+                if (string.IsNullOrWhiteSpace(baseName))
+                {
+                    MessageBox.Show("שם הקובץ שהוזן אינו תקין לאחר ניקוי. אנא נסה שם אחר.", "ולידציה", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    DevDiag.Log("Dialog: sanitized name empty (attachments)");
+                    return;
+                }
+
+                if (!string.Equals(txtCustomFileName.Text, baseName, StringComparison.Ordinal))
+                {
+                    txtCustomFileName.Text = baseName;
+                    DevDiag.Log($"Dialog: sanitized custom name (attachments) -> '{baseName}'");
+                }
+            }
+
             var ent = this.SelectedEntityInfo;
             DevDiag.Log("Dialog: btnSaveAttachments_Click with entity -> " +
-                (ent != null ? (ent.Name + " | Def=" + ent.Definement + " | Sys=" + ent.SystemType) : "<null>"));
+                (ent != null ? (ent.Name + " | Def=" + ent.Definement + " | Sys=" + ent.SystemType) : "<null>") +
+                $" | preselectedCount={_preselectedAttachmentIndices?.Count ?? 0}");
 
-            SelectedOption = SaveOption.SaveAttachments; // alias ל-SaveAttachmentsOnly
+            SelectedOption = SaveOption.SaveAttachments; // תואם ללוגיקה בריבון (SaveAttachments / SaveAttachmentsOnly)
             TryPersistLastCategory();
+
+            DevDiag.Log($"Dialog: btnSaveAttachments_Click EXIT - SelectedOption={SelectedOption}, UseCustom?={chkCustomFileName.Checked}, FinalName='{txtCustomFileName.Text}'");
+
             this.DialogResult = DialogResult.OK;
             this.Close();
         }
+
 
         // כפתור: "ביטול"
         private void btnCancel_Click(object sender, EventArgs e)
@@ -295,6 +469,7 @@ namespace BarOutlookAddIn
 
                     Properties.Settings.Default.ConfigPath = ofd.FileName;
 
+                    // If the XML contains an archive path, keep SaveBaseFolder in settings (existing behavior)
                     if (!string.IsNullOrWhiteSpace(newCfg.ArchivePath))
                     {
                         try
@@ -311,6 +486,71 @@ namespace BarOutlookAddIn
                             DevDiag.Log("Dialog: btnLoadSettings set SaveBaseFolder EX " + exSet.Message);
                         }
                     }
+
+                    // NEW: If XML contains SQL settings, build and persist a ConnectionString so DB calls work immediately
+                    try
+                    {
+                        bool setConn = false;
+                        var props = Properties.Settings.Default.Properties;
+                        // If config has server+db, create connection string
+                        if (!string.IsNullOrWhiteSpace(newCfg.SqlServerAddress) && !string.IsNullOrWhiteSpace(newCfg.SqlDbName))
+                        {
+                            try
+                            {
+                                var builder = new System.Data.SqlClient.SqlConnectionStringBuilder();
+                                builder.DataSource = newCfg.SqlServerAddress;
+                                builder.InitialCatalog = newCfg.SqlDbName;
+
+                                if (!string.IsNullOrWhiteSpace(newCfg.SqlUserName))
+                                {
+                                    builder.UserID = newCfg.SqlUserName;
+                                    builder.Password = newCfg.SqlPassword ?? "";
+                                    builder.IntegratedSecurity = false;
+                                }
+                                else
+                                {
+                                    // When user name not set assume integrated security
+                                    builder.IntegratedSecurity = true;
+                                }
+
+                                if (props != null && props["ConnectionString"] != null)
+                                {
+                                    Properties.Settings.Default["ConnectionString"] = builder.ConnectionString;
+                                    DevDiag.Log("Dialog: btnLoadSettings ConnectionString set -> " + builder.ConnectionString);
+                                }
+                                setConn = true;
+                            }
+                            catch (Exception exCs)
+                            {
+                                DevDiag.Log("Dialog: btnLoadSettings build ConnectionString EX " + exCs.Message);
+                            }
+                        }
+
+                        // Try to also persist server/db into individual settings used elsewhere (best-effort)
+                        try
+                        {
+                            if (props != null)
+                            {
+                                if (!string.IsNullOrWhiteSpace(newCfg.SqlServerAddress) && props["ServerAddressNB"] != null)
+                                    Properties.Settings.Default["ServerAddressNB"] = newCfg.SqlServerAddress;
+                                if (!string.IsNullOrWhiteSpace(newCfg.SqlDbName) && props["NBDBName"] != null)
+                                    Properties.Settings.Default["NBDBName"] = newCfg.SqlDbName;
+                                if (!string.IsNullOrWhiteSpace(newCfg.SqlUserName) && props["SqlUserName"] != null)
+                                    Properties.Settings.Default["SqlUserName"] = newCfg.SqlUserName;
+                                if (!string.IsNullOrWhiteSpace(newCfg.SqlPassword) && props["SqlPassword"] != null)
+                                    Properties.Settings.Default["SqlPassword"] = newCfg.SqlPassword;
+                                if (setConn)
+                                {
+                                    DevDiag.Log("Dialog: btnLoadSettings persisted individual SQL settings (best-effort)");
+                                }
+                            }
+                        }
+                        catch (Exception exSetSql)
+                        {
+                            DevDiag.Log("Dialog: btnLoadSettings persist individual SQL settings EX " + exSetSql.Message);
+                        }
+                    }
+                    catch (Exception) { }
 
                     try { Properties.Settings.Default.Save(); DevDiag.Log("Dialog: btnLoadSettings Settings saved"); } catch { }
 
@@ -483,8 +723,38 @@ namespace BarOutlookAddIn
                 DevDiag.Log("Dialog: Entity changed EX " + ex.Message);
             }
         }
+        private void chkCustomFileName_CheckedChanged(object sender, EventArgs e)
+        {
+            txtCustomFileName.Enabled = chkCustomFileName.Checked;
+            if (!chkCustomFileName.Checked)
+                txtCustomFileName.Text = "";
+        }
+
+        // עזר לסינון שם קובץ (אם אין כבר באחד הקבצים)
+        private static string CleanFileName(string name)
+        {
+            // return empty for blank input to let callers treat it as invalid
+            if (string.IsNullOrWhiteSpace(name)) return string.Empty;
+            foreach (char c in System.IO.Path.GetInvalidFileNameChars())
+                name = name.Replace(c, '_');
+            return name.Trim();
+        }
+
+        private static string Sanitize(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return "";
+            foreach (char c in System.IO.Path.GetInvalidFileNameChars())
+                name = name.Replace(c, '_');
+            return name.Trim();
+        }
+
 
         private void labelEntity_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        private void SaveEmailDialog_Load(object sender, EventArgs e)
         {
 
         }

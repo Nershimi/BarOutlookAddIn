@@ -2,37 +2,40 @@
 using System.Data;
 using System.Data.SqlClient;
 using System.Text.RegularExpressions;
-using BarOutlookAddIn;
-
 
 namespace BarOutlookAddIn.Helpers
 {
     public class ArchiveWriter
     {
-        // -------- Preferred overload: uses EntityInfo so we pass correct system type + definement --------
+        // ========= API =========
+
         public bool TryInsertRecord(EntityInfo entity, string dspEntityNum, string fullPath, string fileDesc)
         {
             if (entity == null) return false;
 
-            string cs = GetConnectionString();
+            var cs = GetConnectionString();
             if (string.IsNullOrWhiteSpace(cs)) return false;
 
             try
             {
-                // Ensure we have a proper system type char (e.g., 'ת', 'ב', 'פ', ...)
-                char entityTypeChar = 'ב';
+                // קביעת סוג יישות (עברית) כפי שמגיע מה-DB
+                char sysChar = 'ב';
                 if (!string.IsNullOrWhiteSpace(entity.SystemType))
                 {
-                    string st = entity.SystemType.Trim();
-                    if (st.Length > 0) entityTypeChar = st[0];
+                    var st = entity.SystemType.Trim();
+                    if (st.Length > 0) sysChar = st[0];
                 }
 
-                // IMPORTANT: definement must come from EntityInfo (e.g., 10 for תוכנית)
-                int definement = entity.Definement;
+                // מיפוי לגרסת ה-SP הישנה:
+                // - לכל מה שלא "תוכנית" → 'P'
+                // - לתוכנית → 'ת'
+                string spEntityType = MapEntityTypeForStoredProc(sysChar);
 
-                // For תוכנית – DO NOT clean; keep full text including slashes/hyphens.
-                // For others – keep legacy cleaning behavior.
-                string cleanedDsp = CleanDspForEntity(entityTypeChar, dspEntityNum);
+                // definement: לפי הגרסה הישנה – לתוכנית 0; לאחרות ערך ה-Definement
+                int definement = (sysChar == 'ת') ? 0 : entity.Definement;
+
+                // ניקוי מספר זיהוי (כמו קודם): לתוכנית לא מנקים; לאחרות מנקים
+                string cleanedDsp = (sysChar == 'ת') ? (dspEntityNum ?? "") : CleanDspIfNeeded(dspEntityNum);
 
                 using (var con = new SqlConnection(cs))
                 using (var cmd = new SqlCommand("SP_Insert_Archive", con))
@@ -40,21 +43,46 @@ namespace BarOutlookAddIn.Helpers
                     cmd.CommandType = CommandType.StoredProcedure;
 
                     cmd.Parameters.Add("@Estate_Number", SqlDbType.BigInt).Value = 0;
-                    cmd.Parameters.Add("@entity_type", SqlDbType.NVarChar, 1).Value = entityTypeChar.ToString(); // NVARCHAR for Hebrew
+                    // חשוב: VarChar(1) כדי לאותת ל-SP את הקוד 'P' / 'ת' בדיוק כמו בישן
+                    cmd.Parameters.Add("@entity_type", SqlDbType.VarChar, 1).Value = spEntityType;
+
                     cmd.Parameters.Add("@definement_entity_type", SqlDbType.Int).Value = definement;
 
-                    // Use NVARCHAR for Hebrew/UTF-8 strings
+                    // נשאיר NVARCHAR כדי לתמוך בעברית בשדות טקסטואליים
                     cmd.Parameters.Add("@Org_Entity_Number", SqlDbType.NVarChar, 100).Value = (object)(cleanedDsp ?? "") ?? "";
                     cmd.Parameters.Add("@File_Name", SqlDbType.NVarChar, 255).Value = (object)(fileDesc ?? "") ?? "";
-                    cmd.Parameters.Add("@File_Location", SqlDbType.NVarChar, -1).Value = (object)(fullPath ?? "") ?? ""; // -1 = NVARCHAR(MAX)
+                    cmd.Parameters.Add("@File_Location", SqlDbType.NVarChar, -1).Value = (object)(fullPath ?? "") ?? "";
+
+                    // פרמטר החזרה + לוג InfoMessage
+                    var ret = cmd.Parameters.Add("@RETURN_VALUE", SqlDbType.Int);
+                    ret.Direction = ParameterDirection.ReturnValue;
+
+                    con.InfoMessage += (s, e) => { try { DevDiag.Log("SQLMsg: " + e.Message); } catch { } };
+                    con.FireInfoMessageEventOnUserErrors = true;
+
+                    // לוג יעד
+                    try
+                    {
+                        var b = new SqlConnectionStringBuilder(cs);
+                        DevDiag.Log($"DBTargetCS: server={b.DataSource} db={b.InitialCatalog} user={b.UserID}");
+                    }
+                    catch { }
 
                     con.Open();
                     int rows = cmd.ExecuteNonQuery();
 
-                    // Log runnable EXEC for diagnostics
-                    try { DevDiag.Log("EXEC " + DevDiag.AsExec(cmd) + " | rows=" + rows); } catch { }
-                    
-                    return rows > 0;
+                    // לוג EXEC קריא
+                    try
+                    {
+                        int rv = 0; try { rv = (ret.Value is int i) ? i : 0; } catch { }
+                        DevDiag.Log("DB: SP return value = " + rv);
+                        DevDiag.Log("EXEC " + DevDiag.AsExec(cmd) + " | rows=" + rows);
+                    }
+                    catch { }
+
+                    // ב-SP מסוים rows=-1 תקין; נשתמש ב-ReturnValue==0 כ"עבר"
+                    int retVal = 0; try { retVal = (ret.Value is int i) ? i : 0; } catch { }
+                    return retVal == 0;
                 }
             }
             catch (Exception ex)
@@ -64,32 +92,26 @@ namespace BarOutlookAddIn.Helpers
             }
         }
 
-        // -------- Legacy-compatible overload (string entityName) --------
+        // תאימות לאחור לפי שם ישות (אם הדיאלוג מחזיר string בלבד)
         public bool TryInsertRecord(string entityName, string dspEntityNum, string fullPath, string fileDesc)
         {
-            string cs = GetConnectionString();
+            var cs = GetConnectionString();
             if (string.IsNullOrWhiteSpace(cs)) return false;
 
             try
             {
-                string systemEntityType = GetSystemEntityType(cs, entityName); // e.g. "ת"/"ב"/"פ"
-                char entityTypeChar = (!string.IsNullOrWhiteSpace(systemEntityType)) ? systemEntityType.Trim()[0] : 'ב';
+                // נאתר סוג מערכת (עברית) להגדרת המיפוי
+                string sysTypeStr = GetSystemEntityType(cs, entityName); // "ת"/"ב"/"פ"/...
+                char sysChar = (!string.IsNullOrWhiteSpace(sysTypeStr)) ? sysTypeStr.Trim()[0] : 'ב';
+                string spEntityType = MapEntityTypeForStoredProc(sysChar);
 
-                int definement;
-                if (entityTypeChar == 'ת')
-                {
-                    // For תוכנית: try to fetch definement from System_Entity by Description_Code
-                    definement = TryGetPlanDefinementFromSystemEntity(cs, entityName);
-                }
-                else
-                {
-                    // For others: from Entity_Type_Control
-                    definement = GetDefinementEntityType(cs, entityName);
-                }
+                int definement = (sysChar == 'ת')
+                    ? 0
+                    : GetDefinementEntityType(cs, entityName);
 
-                string cleanedDsp = (entityTypeChar == 'ת')
-                    ? (dspEntityNum ?? "")               // keep as-is for תוכנית
-                    : CleanDspIfNeeded(dspEntityNum);    // legacy cleaning for others
+                string cleanedDsp = (sysChar == 'ת')
+                    ? (dspEntityNum ?? "")
+                    : CleanDspIfNeeded(dspEntityNum);
 
                 using (var con = new SqlConnection(cs))
                 using (var cmd = new SqlCommand("SP_Insert_Archive", con))
@@ -97,18 +119,39 @@ namespace BarOutlookAddIn.Helpers
                     cmd.CommandType = CommandType.StoredProcedure;
 
                     cmd.Parameters.Add("@Estate_Number", SqlDbType.BigInt).Value = 0;
-                    cmd.Parameters.Add("@entity_type", SqlDbType.NVarChar, 1).Value = entityTypeChar.ToString();
+                    cmd.Parameters.Add("@entity_type", SqlDbType.VarChar, 1).Value = spEntityType;
                     cmd.Parameters.Add("@definement_entity_type", SqlDbType.Int).Value = definement;
+
                     cmd.Parameters.Add("@Org_Entity_Number", SqlDbType.NVarChar, 100).Value = (object)(cleanedDsp ?? "") ?? "";
                     cmd.Parameters.Add("@File_Name", SqlDbType.NVarChar, 255).Value = (object)(fileDesc ?? "") ?? "";
                     cmd.Parameters.Add("@File_Location", SqlDbType.NVarChar, -1).Value = (object)(fullPath ?? "") ?? "";
 
+                    var ret = cmd.Parameters.Add("@RETURN_VALUE", SqlDbType.Int);
+                    ret.Direction = ParameterDirection.ReturnValue;
+
+                    con.InfoMessage += (s, e) => { try { DevDiag.Log("SQLMsg: " + e.Message); } catch { } };
+                    con.FireInfoMessageEventOnUserErrors = true;
+
+                    try
+                    {
+                        var b = new SqlConnectionStringBuilder(cs);
+                        DevDiag.Log($"DBTargetCS: server={b.DataSource} db={b.InitialCatalog} user={b.UserID}");
+                    }
+                    catch { }
+
                     con.Open();
                     int rows = cmd.ExecuteNonQuery();
 
-                    try { DevDiag.Log("EXEC " + DevDiag.AsExec(cmd) + " | rows=" + rows); } catch { }
+                    try
+                    {
+                        int rv = 0; try { rv = (ret.Value is int i) ? i : 0; } catch { }
+                        DevDiag.Log("DB: SP return value = " + rv);
+                        DevDiag.Log("EXEC " + DevDiag.AsExec(cmd) + " | rows=" + rows);
+                    }
+                    catch { }
 
-                    return rows > 0;
+                    int retVal = 0; try { retVal = (ret.Value is int i) ? i : 0; } catch { }
+                    return retVal == 0;
                 }
             }
             catch (Exception ex)
@@ -118,7 +161,15 @@ namespace BarOutlookAddIn.Helpers
             }
         }
 
-        // ---------------- helpers ----------------
+        // ========= Helpers =========
+
+        private static string MapEntityTypeForStoredProc(char sysChar)
+        {
+            // נאמן לגמרי לגרסה הישנה שלך:
+            // בקשות/פיקוח/כללי/תביעה וכו' → 'P'
+            // תוכנית → 'ת'
+            return (sysChar == 'ת') ? "ת" : "P";
+        }
 
         private string GetConnectionString()
         {
@@ -135,19 +186,7 @@ namespace BarOutlookAddIn.Helpers
             return null;
         }
 
-        /// <summary>
-        /// For תוכנית ('ת'): return dsp as-is (supports "6870/6-מזרחי").
-        /// For others: legacy cleaning (digits extraction unless IsShomron).
-        /// </summary>
-        private string CleanDspForEntity(char entityTypeChar, string dsp)
-        {
-            if (entityTypeChar == 'ת')
-                return dsp ?? "";
-
-            return CleanDspIfNeeded(dsp);
-        }
-
-        // Legacy behavior used for non-plan entities
+        // ניקוי כמקודם (ללא שומרון)
         private string CleanDspIfNeeded(string dsp)
         {
             try
@@ -167,10 +206,9 @@ namespace BarOutlookAddIn.Helpers
                 if (isShomron) return dsp ?? "";
                 if (string.IsNullOrWhiteSpace(dsp)) return "";
 
-                string[] parts = Regex.Split(dsp, @"\D+");
-                for (int i = 0; i < parts.Length; i++)
+                var parts = Regex.Split(dsp, @"\D+");
+                foreach (var p in parts)
                 {
-                    string p = parts[i];
                     if (!string.IsNullOrEmpty(p) && p.Length > 1) return p;
                 }
                 return dsp;
@@ -190,7 +228,7 @@ namespace BarOutlookAddIn.Helpers
                     "SELECT TOP 1 [system_entity_type] " +
                     "FROM [dbo].[Entity_Type_Control] " +
                     "WHERE [entity_name]=@name";
-                cmd.Parameters.AddWithValue("@name", entityName); // NVARCHAR
+                cmd.Parameters.AddWithValue("@name", entityName);
                 con.Open();
                 object o = cmd.ExecuteScalar();
                 if (o != null && o != DBNull.Value) sysType = o.ToString();
@@ -211,7 +249,7 @@ namespace BarOutlookAddIn.Helpers
                     "SELECT TOP 1 [entity_type] " +
                     "FROM [dbo].[Entity_Type_Control] " +
                     "WHERE [entity_name]=@name";
-                cmd.Parameters.AddWithValue("@name", entityName); // NVARCHAR
+                cmd.Parameters.AddWithValue("@name", entityName);
                 con.Open();
                 object o = cmd.ExecuteScalar();
                 if (o != null && o != DBNull.Value)
@@ -220,33 +258,6 @@ namespace BarOutlookAddIn.Helpers
                 }
             }
             return code;
-        }
-
-        /// <summary>
-        /// For תוכנית: try to get definement from System_Entity table (definement_entity_type)
-        /// by Description_Code (entityName). If not found, return 0.
-        /// </summary>
-        private int TryGetPlanDefinementFromSystemEntity(string cs, string entityName)
-        {
-            if (string.IsNullOrWhiteSpace(entityName)) return 0;
-
-            int def = 0;
-            using (var con = new SqlConnection(cs))
-            using (var cmd = con.CreateCommand())
-            {
-                cmd.CommandText =
-                    "SELECT TOP 1 [definement_entity_type] " +
-                    "FROM [dbo].[System_Entity] " +
-                    "WHERE [Code_Identification] = N'ת' AND [Description_Code] = @name";
-                cmd.Parameters.AddWithValue("@name", entityName); // NVARCHAR
-                con.Open();
-                object o = cmd.ExecuteScalar();
-                if (o != null && o != DBNull.Value)
-                {
-                    int.TryParse(o.ToString(), out def);
-                }
-            }
-            return def;
         }
     }
 }

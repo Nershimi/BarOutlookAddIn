@@ -8,6 +8,9 @@
             : base(Globals.Factory.GetRibbonFactory())
         {
             InitializeComponent();
+
+            // ודא טעינה בכל ההקשרים הרלוונטיים של אאוטלוק
+            this.RibbonType = "Microsoft.Outlook.Explorer, Microsoft.Outlook.Mail.Read, Microsoft.Outlook.Mail.Compose, Microsoft.Outlook.Inspector";
         }
 
         protected override void Dispose(bool disposing)
@@ -34,7 +37,7 @@
             // tab1
             // 
             this.tab1.ControlId.ControlIdType = Microsoft.Office.Tools.Ribbon.RibbonControlIdType.Office;
-            this.tab1.ControlId.OfficeId = "TabMail";
+            this.tab1.ControlId.OfficeId = "TabMail"; // טאב Home של ה-Explorer
             this.tab1.Groups.Add(this.group1);
             this.tab1.Label = "TabMail";
             this.tab1.Name = "tab1";
@@ -48,17 +51,20 @@
             // btnSaveSelectedEmail
             // 
             this.btnSaveSelectedEmail.ControlSize = Microsoft.Office.Core.RibbonControlSize.RibbonControlSizeLarge;
-            this.btnSaveSelectedEmail.Image = ((System.Drawing.Image)(resources.GetObject("btnSaveSelectedEmail.Image")));
-            this.btnSaveSelectedEmail.Label = "";
+            this.btnSaveSelectedEmail.Label = "שמירה לארכיב"; // שיהיה נראה גם בלי תמונה
             this.btnSaveSelectedEmail.Name = "btnSaveSelectedEmail";
             this.btnSaveSelectedEmail.ShowImage = true;
+            try
+            {
+                this.btnSaveSelectedEmail.Image = ((System.Drawing.Image)(resources.GetObject("btnSaveSelectedEmail.Image")));
+            }
+            catch { /* אם אין אייקון — לא להפיל */ }
             this.btnSaveSelectedEmail.Click += new Microsoft.Office.Tools.Ribbon.RibbonControlEventHandler(this.btnSaveSelectedEmail_Click);
             // 
             // SaveEmailRibbon
             // 
             this.Name = "SaveEmailRibbon";
-            this.RibbonType = "Microsoft.Outlook.Explorer, Microsoft.Outlook.Mail.Read, Microsoft.Outlook.Mail.C" +
-    "ompose";
+            this.RibbonType = "Microsoft.Outlook.Explorer, Microsoft.Outlook.Mail.Read, Microsoft.Outlook.Mail.Compose, Microsoft.Outlook.Inspector";
             this.Tabs.Add(this.tab1);
             this.Load += new Microsoft.Office.Tools.Ribbon.RibbonUIEventHandler(this.SaveEmailRibbon_Load);
             this.tab1.ResumeLayout(false);

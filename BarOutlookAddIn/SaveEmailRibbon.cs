@@ -14,7 +14,7 @@ namespace BarOutlookAddIn
     {
         private void SaveEmailRibbon_Load(object sender, RibbonUIEventArgs e)
         {
-            // no-op
+            DevDiag.Log("Designer: SaveEmailRibbon_Load");
         }
 
         private void btnSaveSelectedEmail_Click(object sender, RibbonControlEventArgs e)
@@ -80,16 +80,19 @@ namespace BarOutlookAddIn
                     DevDiag.Log("Ribbon: SelectedOption=" + dialog.SelectedOption);
 
                     // --- 1) Save whole email (.msg) named by the Subject ---
+                    // --- 1) Save whole email (.msg) named by the Subject or by custom name ---
                     if (dialog.SelectedOption == SaveEmailDialog.SaveOption.SaveEmail)
                     {
-                        string subject = mailItem.Subject ?? "NoSubject";
-                        string safeSubject = CleanFileName(subject);
-                        if (string.IsNullOrWhiteSpace(safeSubject)) safeSubject = "NoSubject";
+                        // אם המשתמש סימן "שם קובץ מותאם" – נשתמש בו, אחרת בנושא המייל
+                        string fileBase = dialog.UseCustomFileName
+                            ? CleanFileName(dialog.CustomFileName)
+                            : CleanFileName(mailItem.Subject ?? "NoSubject");
+                        if (string.IsNullOrWhiteSpace(fileBase)) fileBase = "NoSubject";
 
-                        string initialPath = Path.Combine(categoryFolder, safeSubject + ".msg");
+                        string initialPath = Path.Combine(categoryFolder, fileBase + ".msg");
                         string fullPath = GetUniquePath(initialPath);
 
-                        DevDiag.Log($"Ribbon: saving MSG by subject. subject='{subject}', safe='{safeSubject}', path='{fullPath}'");
+                        DevDiag.Log($"Ribbon: saving MSG. base='{fileBase}', path='{fullPath}'");
 
                         mailItem.SaveAs(fullPath, Outlook.OlSaveAsType.olMSG);
                         DevDiag.Log("Ribbon: saved msg exists? " + File.Exists(fullPath));
@@ -97,8 +100,8 @@ namespace BarOutlookAddIn
                         try
                         {
                             bool ok = (ent != null)
-                             ? writer.TryInsertRecord(ent, requestNumber, fullPath, Path.GetFileName(fullPath))
-                             : writer.TryInsertRecord(entityName, requestNumber, fullPath, Path.GetFileName(fullPath));
+                                ? writer.TryInsertRecord(ent, requestNumber, fullPath, Path.GetFileName(fullPath))
+                                : writer.TryInsertRecord(entityName, requestNumber, fullPath, Path.GetFileName(fullPath));
                             DevDiag.Log("Ribbon: DB insert after MSG ok? " + ok);
                         }
                         catch (Exception exDb)
@@ -109,9 +112,10 @@ namespace BarOutlookAddIn
                         MessageBox.Show("המייל נשמר:\n" + fullPath, "שמירה",
                             MessageBoxButtons.OK, MessageBoxIcon.Information);
                     }
+
                     // --- 2) Save only attachments, preserving original file names ---
                     else if (dialog.SelectedOption == SaveEmailDialog.SaveOption.SaveAttachmentsOnly
-                          || dialog.SelectedOption == SaveEmailDialog.SaveOption.SaveAttachments)
+      || dialog.SelectedOption == SaveEmailDialog.SaveOption.SaveAttachments)
                     {
                         if (mailItem.Attachments.Count == 0)
                         {
@@ -119,7 +123,6 @@ namespace BarOutlookAddIn
                             return;
                         }
 
-                        // Filter inline/signature attachments
                         var validAttachments = new List<Outlook.Attachment>();
                         foreach (Outlook.Attachment att in mailItem.Attachments)
                             if (!IsInlineImage(att)) validAttachments.Add(att);
@@ -132,32 +135,42 @@ namespace BarOutlookAddIn
                             return;
                         }
 
-                        // Let user pick which attachments to save
                         var names = validAttachments.Select(a => a.FileName).ToList();
                         using (var selectionDialog = new AttachmentSelectionDialog(names))
                         {
                             if (selectionDialog.ShowDialog() != DialogResult.OK)
                                 return;
 
+                            var selectedSet = new HashSet<string>(selectionDialog.SelectedAttachments, StringComparer.OrdinalIgnoreCase);
+                            int selCount = selectedSet.Count;
+                            int counter = 0;
                             int saved = 0;
 
                             foreach (var att in validAttachments)
                             {
-                                if (!selectionDialog.SelectedAttachments.Contains(att.FileName))
+                                if (!selectedSet.Contains(att.FileName))
                                     continue;
 
+                                counter++;
+
                                 string rawName = att.FileName ?? "";
-                                string baseName = Path.GetFileNameWithoutExtension(rawName) ?? "";
                                 string ext = Path.GetExtension(rawName);
                                 if (string.IsNullOrWhiteSpace(ext)) ext = ".bin";
 
-                                string safeBase = CleanFileName(baseName);
-                                if (string.IsNullOrWhiteSpace(safeBase)) safeBase = "attachment";
+                                // בסיס השם: מותאם/ממוספר או לפי שם המצורף
+                                string baseForThis =
+                                    dialog.UseCustomFileName
+                                        ? (selCount == 1
+                                            ? CleanFileName(dialog.CustomFileName)
+                                            : CleanFileName(dialog.CustomFileName) + "_" + counter)
+                                        : CleanFileName(Path.GetFileNameWithoutExtension(rawName) ?? "attachment");
 
-                                string initialPath = Path.Combine(categoryFolder, safeBase + ext);
+                                if (string.IsNullOrWhiteSpace(baseForThis)) baseForThis = "attachment";
+
+                                string initialPath = Path.Combine(categoryFolder, baseForThis + ext);
                                 string filePath = GetUniquePath(initialPath);
 
-                                DevDiag.Log($"Ribbon: saving ATT. raw='{rawName}', base='{baseName}', ext='{ext}', safeBase='{safeBase}', path='{filePath}'");
+                                DevDiag.Log($"Ribbon: saving ATT. raw='{rawName}', base='{baseForThis}', ext='{ext}', path='{filePath}'");
 
                                 try
                                 {
@@ -193,6 +206,7 @@ namespace BarOutlookAddIn
                                 saved > 0 ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
                         }
                     }
+
                 }
             }
             catch (COMException comRoot)
@@ -351,10 +365,10 @@ namespace BarOutlookAddIn
         }
 
         // 3) Sanitize file/folder name
-        private string CleanFileName(string name)
+        private static string CleanFileName(string name)
         {
             if (string.IsNullOrWhiteSpace(name)) return "Unnamed";
-            foreach (char c in Path.GetInvalidFileNameChars())
+            foreach (char c in System.IO.Path.GetInvalidFileNameChars())
                 name = name.Replace(c, '_');
             return name.Trim();
         }
