@@ -67,10 +67,7 @@ SELECT CAST(1 AS INT);", conn, tx))
         /// <summary>
         /// הערך הבא למונה הארכיון (Number_Numerator=5).
         /// </summary>
-        public static int GetNextArchiveNumber()
-        {
-            return GetNext(ArchiveNumberCode);
-        }
+        public static int GetNextArchiveNumber() => GetNext(ArchiveNumberCode);
 
         private static string GetConnectionString()
         {

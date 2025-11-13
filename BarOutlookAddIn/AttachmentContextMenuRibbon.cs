@@ -127,7 +127,7 @@ namespace BarOutlookAddIn
 
                     if (dialog.SelectedOption == SaveEmailDialog.SaveOption.SaveEmail)
                     {
-                        // שם בסיס: מותאם אישית אם סומן, אחרת נושא המייל
+                        // שם בסיס: מותאם אישית if chosen, else subject (for log only)
                         string fileBase;
                         if (dialog.UseCustomFileName)
                         {
@@ -143,12 +143,24 @@ namespace BarOutlookAddIn
                             DevDiag.Log($"HomeBtn: using mail subject -> subject='{subject}', safe='{fileBase}'");
                         }
 
-                        string initialPath = System.IO.Path.Combine(categoryFolder, fileBase + ".msg");
-                        string fullPath = GetUniquePath(initialPath);
+                        // Use numeric allocator (ol{N}.msg). fallback to unique name on error.
+                        string fullPath;
+                        try
+                        {
+                            int allocated;
+                            fullPath = FileNameAllocator.AllocatePath(categoryFolder, ".msg", out allocated);
+                            DevDiag.Log($"HomeBtn: allocated numeric filename ol{allocated}.msg -> {fullPath} (base='{fileBase}')");
+                        }
+                        catch (Exception exAlloc)
+                        {
+                            DevDiag.Log("HomeBtn: FileNameAllocator failed, falling back: " + exAlloc.Message);
+                            string initialPath = System.IO.Path.Combine(categoryFolder, fileBase + ".msg");
+                            fullPath = GetUniquePath(initialPath);
+                        }
 
-                        DevDiag.Log($"HomeBtn: saving MSG. path='{fullPath}' (initial='{initialPath}')");
+                        DevDiag.Log($"HomeBtn: saving MSG. path='{fullPath}'");
 
-                        // עדיף עם דיאגנוסטיקה
+                        // preferred: TrySaveMsgWithDiag to capture COMException details
                         if (!TrySaveMsgWithDiag(mailItem, fullPath, out string saveErr))
                         {
                             DevDiag.Log("HomeBtn: SaveAs FAILED: " + saveErr);
@@ -160,9 +172,10 @@ namespace BarOutlookAddIn
 
                         try
                         {
+                            string originalFileDesc = fileBase + ".msg";
                             bool ok = (ent != null)
-                                ? writer.TryInsertRecord(ent, requestNumber, fullPath, System.IO.Path.GetFileName(fullPath))
-                                : writer.TryInsertRecord(entityName, requestNumber, fullPath, System.IO.Path.GetFileName(fullPath));
+                                ? writer.TryInsertRecord(ent, requestNumber, fullPath, originalFileDesc)
+                                : writer.TryInsertRecord(entityName, requestNumber, fullPath, originalFileDesc);
                             DevDiag.Log("HomeBtn: DB insert after MSG ok? " + ok);
                         }
                         catch (Exception exDb)
@@ -246,8 +259,8 @@ namespace BarOutlookAddIn
                                     try
                                     {
                                         bool ok = (ent != null)
-                                            ? writer.TryInsertRecord(ent, requestNumber, filePath, System.IO.Path.GetFileName(filePath))
-                                            : writer.TryInsertRecord(entityName, requestNumber, filePath, System.IO.Path.GetFileName(filePath));
+                                            ? writer.TryInsertRecord(ent, requestNumber, filePath, rawName)
+                                            : writer.TryInsertRecord(entityName, requestNumber, filePath, rawName);
                                         DevDiag.Log("HomeBtn: DB insert after ATT ok? " + ok);
                                     }
                                     catch (Exception exDbA)
@@ -312,7 +325,6 @@ namespace BarOutlookAddIn
 
                 mail = sel.Parent as Outlook.MailItem;
 
-                // אוסף את העצמים שנבחרו (כדי לדעת מי ה-preselected)
                 var enumerable = sel as IEnumerable;
                 if (enumerable != null)
                 {
@@ -323,7 +335,6 @@ namespace BarOutlookAddIn
                     }
                 }
 
-                // ממפה אינדקסים פנימיים של המצורפים הנבחרים לתוך mail.Attachments
                 if (mail != null && mail.Attachments != null && mail.Attachments.Count > 0)
                 {
                     foreach (var selAtt in selectedAttachments)
@@ -333,7 +344,6 @@ namespace BarOutlookAddIn
                     }
                 }
 
-                // פותח את הדיאלוג עם preselect (כפי שעשית)
                 using (var dlg = new SaveEmailDialog(mail, selectedIndices))
                 {
                     var dr = dlg.ShowDialog();
@@ -358,40 +368,9 @@ namespace BarOutlookAddIn
                     var writer = new ArchiveWriter();
                     DevDiag.Log($"CtxBtn: dialog ok. Option={dlg.SelectedOption}, UseCustom={dlg.UseCustomFileName}, Custom='{dlg.CustomFileName}'");
 
-                    if (dlg.SelectedOption == SaveEmailDialog.SaveOption.SaveEmail)
+                    // Save attachments using numeric allocator
+                    if (dlg.SelectedOption == SaveEmailDialog.SaveOption.SaveAttachments || dlg.SelectedOption == SaveEmailDialog.SaveOption.SaveAttachmentsOnly)
                     {
-                        // שם קובץ: מותאם אם סומן, אחרת נושא המייל
-                        string fileBase = dlg.UseCustomFileName
-                            ? CleanFileName(dlg.CustomFileName)
-                            : CleanFileName(mail.Subject ?? "NoSubject");
-                        if (string.IsNullOrWhiteSpace(fileBase)) fileBase = "NoSubject";
-
-                        string fullPath = GetUniquePath(System.IO.Path.Combine(categoryFolder, fileBase + ".msg"));
-                        DevDiag.Log($"CtxBtn: saving MSG. base='{fileBase}', path='{fullPath}'");
-
-                        string err;
-                        if (!TrySaveMsgWithDiag(mail, fullPath, out err))
-                        {
-                            DevDiag.Log("CtxBtn: SaveAs MSG FAIL: " + err);
-                            MessageBox.Show("נכשלה שמירת המייל:\r\n" + err, "שגיאה", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                            return;
-                        }
-                        DevDiag.Log("CtxBtn: saved msg exists? " + System.IO.File.Exists(fullPath));
-
-                        try
-                        {
-                            bool ok = (ent != null)
-                                ? writer.TryInsertRecord(ent, requestNumber, fullPath, System.IO.Path.GetFileName(fullPath))
-                                : writer.TryInsertRecord(entityName, requestNumber, fullPath, System.IO.Path.GetFileName(fullPath));
-                            DevDiag.Log("CtxBtn: DB insert after MSG ok? " + ok);
-                        }
-                        catch (Exception exDb) { DevDiag.Log("CtxBtn: DB insert after MSG EX: " + exDb.Message); }
-
-                        MessageBox.Show("המייל נשמר:\n" + fullPath, "שמירה", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    }
-                    else // SaveAttachments / SaveAttachmentsOnly
-                    {
-                        // המצורפים שנבחרו בקליק-ימני כבר נמצאים ב-selectedAttachments
                         if (selectedAttachments.Count == 0)
                         {
                             MessageBox.Show("לא נבחרו קבצים מצורפים.", "מידע", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -409,21 +388,34 @@ namespace BarOutlookAddIn
                             string ext = System.IO.Path.GetExtension(rawName);
                             if (string.IsNullOrWhiteSpace(ext)) ext = ".bin";
 
-                            string baseForThis;
-                            if (dlg.UseCustomFileName)
+                            string filePath;
+                            try
                             {
-                                string baseClean = CleanFileName(dlg.CustomFileName);
-                                baseForThis = (selCount == 1) ? baseClean : (baseClean + "_" + (i + 1));
+                                int allocated;
+                                filePath = FileNameAllocator.AllocatePath(categoryFolder, ext, out allocated);
+                                DevDiag.Log($"CtxBtn: allocated numeric attachment name ol{allocated}{ext} (raw='{rawName}')");
                             }
-                            else
+                            catch (Exception exAlloc)
                             {
-                                string baseName = System.IO.Path.GetFileNameWithoutExtension(rawName) ?? "attachment";
-                                baseForThis = CleanFileName(baseName);
-                                if (string.IsNullOrWhiteSpace(baseForThis)) baseForThis = "attachment";
+                                DevDiag.Log("CtxBtn: FileNameAllocator failed for attachment, falling back: " + exAlloc.Message);
+
+                                string baseForThis;
+                                if (dlg.UseCustomFileName)
+                                {
+                                    string baseClean = CleanFileName(dlg.CustomFileName);
+                                    baseForThis = (selCount == 1) ? baseClean : (baseClean + "_" + (i + 1));
+                                }
+                                else
+                                {
+                                    string baseName = System.IO.Path.GetFileNameWithoutExtension(rawName) ?? "attachment";
+                                    baseForThis = CleanFileName(baseName);
+                                    if (string.IsNullOrWhiteSpace(baseForThis)) baseForThis = "attachment";
+                                }
+
+                                filePath = GetUniquePath(System.IO.Path.Combine(categoryFolder, baseForThis + ext));
                             }
 
-                            string filePath = GetUniquePath(System.IO.Path.Combine(categoryFolder, baseForThis + ext));
-                            DevDiag.Log($"CtxBtn: saving ATT. raw='{rawName}', base='{baseForThis}', ext='{ext}', path='{filePath}', UseCustom={dlg.UseCustomFileName}, idx={i + 1}/{selCount}");
+                            DevDiag.Log($"CtxBtn: saving ATT. raw='{rawName}', path='{filePath}'");
 
                             try
                             {
@@ -433,8 +425,8 @@ namespace BarOutlookAddIn
                                 try
                                 {
                                     bool ok = (ent != null)
-                                        ? writer.TryInsertRecord(ent, requestNumber, filePath, System.IO.Path.GetFileName(filePath))
-                                        : writer.TryInsertRecord(entityName, requestNumber, filePath, System.IO.Path.GetFileName(filePath));
+                                        ? writer.TryInsertRecord(ent, requestNumber, filePath, rawName)
+                                        : writer.TryInsertRecord(entityName, requestNumber, filePath, rawName);
                                     DevDiag.Log("CtxBtn: DB insert after ATT ok? " + ok);
                                 }
                                 catch (Exception exDbA) { DevDiag.Log("CtxBtn: DB insert after ATT EX: " + exDbA.Message); }
@@ -455,7 +447,6 @@ namespace BarOutlookAddIn
                             saved > 0 ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
                     }
                 }
-
             }
             finally
             {

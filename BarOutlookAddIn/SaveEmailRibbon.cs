@@ -61,8 +61,7 @@ namespace BarOutlookAddIn
 
                     DevDiag.Log("Ribbon: baseFolder=" + baseFolder
                         + " | category='" + category + "'"
-                        + " | categoryFolder=" + categoryFolder
-                        + " | req='" + requestNumber + "'");
+                        + " | categoryFolder=" + categoryFolder + " | req='" + requestNumber + "'");
 
                     // וידוא הרשאות כתיבה פיזיות
                     if (!EnsureWritableFolder(categoryFolder, out string ensureErr))
@@ -79,18 +78,33 @@ namespace BarOutlookAddIn
 
                     DevDiag.Log("Ribbon: SelectedOption=" + dialog.SelectedOption);
 
-                    // --- 1) Save whole email (.msg) named by the Subject ---
-                    // --- 1) Save whole email (.msg) named by the Subject or by custom name ---
+                    // --- 1) Save whole email (.msg) named by a numeric sequence ---
                     if (dialog.SelectedOption == SaveEmailDialog.SaveOption.SaveEmail)
                     {
-                        // אם המשתמש סימן "שם קובץ מותאם" – נשתמש בו, אחרת בנושא המייל
+                        // Keep human base (for logging) but use numeric filename
                         string fileBase = dialog.UseCustomFileName
                             ? CleanFileName(dialog.CustomFileName)
                             : CleanFileName(mailItem.Subject ?? "NoSubject");
                         if (string.IsNullOrWhiteSpace(fileBase)) fileBase = "NoSubject";
 
-                        string initialPath = Path.Combine(categoryFolder, fileBase + ".msg");
-                        string fullPath = GetUniquePath(initialPath);
+                        // Persist original (human) filename to DB as description
+                        string originalFileDesc = fileBase + ".msg";
+
+                        string fullPath;
+                        try
+                        {
+                            // Use filesystem allocator to get ol{N}.msg
+                            int allocatedNumber;
+                            fullPath = FileNameAllocator.AllocatePath(categoryFolder, ".msg", out allocatedNumber);
+                            DevDiag.Log($"Ribbon: allocated numeric filename ol{allocatedNumber}.msg -> {fullPath} (base='{fileBase}')");
+                        }
+                        catch (Exception exAlloc)
+                        {
+                            // Fall back to previous behavior if allocator fails
+                            DevDiag.Log("Ribbon: FileNameAllocator failed, falling back: " + exAlloc.Message);
+                            string initialPath = Path.Combine(categoryFolder, fileBase + ".msg");
+                            fullPath = GetUniquePath(initialPath);
+                        }
 
                         DevDiag.Log($"Ribbon: saving MSG. base='{fileBase}', path='{fullPath}'");
 
@@ -99,9 +113,10 @@ namespace BarOutlookAddIn
 
                         try
                         {
+                            // Pass numeric fullPath to DB, but use originalFileDesc as File_Name (description)
                             bool ok = (ent != null)
-                                ? writer.TryInsertRecord(ent, requestNumber, fullPath, Path.GetFileName(fullPath))
-                                : writer.TryInsertRecord(entityName, requestNumber, fullPath, Path.GetFileName(fullPath));
+                                ? writer.TryInsertRecord(ent, requestNumber, fullPath, originalFileDesc)
+                                : writer.TryInsertRecord(entityName, requestNumber, fullPath, originalFileDesc);
                             DevDiag.Log("Ribbon: DB insert after MSG ok? " + ok);
                         }
                         catch (Exception exDb)
@@ -113,7 +128,7 @@ namespace BarOutlookAddIn
                             MessageBoxButtons.OK, MessageBoxIcon.Information);
                     }
 
-                    // --- 2) Save only attachments, preserving original file names ---
+                    // --- 2) Save only attachments, using numeric names per file ---
                     else if (dialog.SelectedOption == SaveEmailDialog.SaveOption.SaveAttachmentsOnly
       || dialog.SelectedOption == SaveEmailDialog.SaveOption.SaveAttachments)
                     {
@@ -157,20 +172,25 @@ namespace BarOutlookAddIn
                                 string ext = Path.GetExtension(rawName);
                                 if (string.IsNullOrWhiteSpace(ext)) ext = ".bin";
 
-                                // בסיס השם: מותאם/ממוספר או לפי שם המצורף
-                                string baseForThis =
-                                    dialog.UseCustomFileName
-                                        ? (selCount == 1
-                                            ? CleanFileName(dialog.CustomFileName)
-                                            : CleanFileName(dialog.CustomFileName) + "_" + counter)
+                                string filePath;
+                                try
+                                {
+                                    int allocatedNumber;
+                                    filePath = FileNameAllocator.AllocatePath(categoryFolder, ext, out allocatedNumber);
+                                    DevDiag.Log($"Ribbon: allocated numeric attachment name ol{allocatedNumber}{ext} (raw='{rawName}')");
+                                }
+                                catch (Exception exAlloc)
+                                {
+                                    DevDiag.Log("Ribbon: FileNameAllocator failed for attachment, falling back: " + exAlloc.Message);
+                                    string baseForThis = dialog.UseCustomFileName
+                                        ? (selCount == 1 ? CleanFileName(dialog.CustomFileName) : CleanFileName(dialog.CustomFileName) + "_" + counter)
                                         : CleanFileName(Path.GetFileNameWithoutExtension(rawName) ?? "attachment");
+                                    if (string.IsNullOrWhiteSpace(baseForThis)) baseForThis = "attachment";
+                                    string initialPath = Path.Combine(categoryFolder, baseForThis + ext);
+                                    filePath = GetUniquePath(initialPath);
+                                }
 
-                                if (string.IsNullOrWhiteSpace(baseForThis)) baseForThis = "attachment";
-
-                                string initialPath = Path.Combine(categoryFolder, baseForThis + ext);
-                                string filePath = GetUniquePath(initialPath);
-
-                                DevDiag.Log($"Ribbon: saving ATT. raw='{rawName}', base='{baseForThis}', ext='{ext}', path='{filePath}'");
+                                DevDiag.Log($"Ribbon: saving ATT. raw='{rawName}', path='{filePath}'");
 
                                 try
                                 {
@@ -180,9 +200,10 @@ namespace BarOutlookAddIn
 
                                     try
                                     {
+                                        // Pass numeric fullPath, but set file description to original name (rawName)
                                         bool ok = (ent != null)
-                                          ? writer.TryInsertRecord(ent, requestNumber, filePath, Path.GetFileName(filePath))
-                                          : writer.TryInsertRecord(entityName, requestNumber, filePath, Path.GetFileName(filePath));
+                                          ? writer.TryInsertRecord(ent, requestNumber, filePath, rawName)
+                                          : writer.TryInsertRecord(entityName, requestNumber, filePath, rawName);
                                         DevDiag.Log("Ribbon: DB insert after ATT ok? " + ok);
                                     }
                                     catch (Exception exDbA)
