@@ -143,17 +143,48 @@ namespace BarOutlookAddIn
                             DevDiag.Log($"HomeBtn: using mail subject -> subject='{subject}', safe='{fileBase}'");
                         }
 
-                        // Use numeric allocator (ol{N}.msg). fallback to unique name on error.
+                        // Use numeric allocator (ol{N}.msg). try DB numerator first, fallback to FileNameAllocator and then unique name.
                         string fullPath;
                         try
                         {
-                            int allocated;
-                            fullPath = FileNameAllocator.AllocatePath(categoryFolder, ".msg", out allocated);
-                            DevDiag.Log($"HomeBtn: allocated numeric filename ol{allocated}.msg -> {fullPath} (base='{fileBase}')");
+                            int allocatedNumber;
+                            try
+                            {
+                                // Try DB numerator first (atomic)
+                                allocatedNumber = NumeratorService.GetNextArchiveNumber();
+                                fullPath = Path.Combine(categoryFolder, "ol" + allocatedNumber + ".msg");
+                                DevDiag.Log($"HomeBtn: allocated numeric filename from DB ol{allocatedNumber}.msg -> {fullPath} (base='{fileBase}')");
+                            }
+                            catch (Exception dbEx)
+                            {
+                                // More detailed logging to capture full stack/inner exceptions for Numerator failures
+                                try
+                                {
+                                    DevDiag.Log("HomeBtn: NumeratorService failed for MSG, falling back to FileNameAllocator: " + dbEx.ToString());
+                                    if (dbEx is System.Data.SqlClient.SqlException sqlEx)
+                                    {
+                                        for (int j = 0; j < sqlEx.Errors.Count; j++)
+                                            DevDiag.Log($"HomeBtn: SqlError[{j}] Number={sqlEx.Errors[j].Number} Proc={sqlEx.Errors[j].Procedure} Line={sqlEx.Errors[j].LineNumber} Msg={sqlEx.Errors[j].Message}");
+                                    }
+                                }
+                                catch { }
+                                try
+                                {
+                                    // fallback to file-system allocator
+                                    fullPath = FileNameAllocator.AllocatePath(categoryFolder, ".msg", out allocatedNumber);
+                                    DevDiag.Log($"HomeBtn: allocated numeric filename FS ol{allocatedNumber}.msg -> {fullPath} (base='{fileBase}')");
+                                }
+                                catch (Exception exAlloc)
+                                {
+                                    DevDiag.Log("HomeBtn: FileNameAllocator fallback failed: " + exAlloc.ToString());
+                                    string initialPath = System.IO.Path.Combine(categoryFolder, fileBase + ".msg");
+                                    fullPath = GetUniquePath(initialPath);
+                                }
+                            }
                         }
                         catch (Exception exAlloc)
                         {
-                            DevDiag.Log("HomeBtn: FileNameAllocator failed, falling back: " + exAlloc.Message);
+                            DevDiag.Log("HomeBtn: allocator failed, falling back: " + exAlloc.Message);
                             string initialPath = System.IO.Path.Combine(categoryFolder, fileBase + ".msg");
                             fullPath = GetUniquePath(initialPath);
                         }
@@ -388,31 +419,30 @@ namespace BarOutlookAddIn
                             string ext = System.IO.Path.GetExtension(rawName);
                             if (string.IsNullOrWhiteSpace(ext)) ext = ".bin";
 
+                            int allocated;
                             string filePath;
                             try
                             {
-                                int allocated;
-                                filePath = FileNameAllocator.AllocatePath(categoryFolder, ext, out allocated);
-                                DevDiag.Log($"CtxBtn: allocated numeric attachment name ol{allocated}{ext} (raw='{rawName}')");
+                                allocated = NumeratorService.GetNextArchiveNumber();
+                                filePath = Path.Combine(categoryFolder, "ol" + allocated + ext);
+                                DevDiag.Log($"CtxBtn: allocated numeric attachment name from DB ol{allocated}{ext} (raw='{rawName}')");
                             }
-                            catch (Exception exAlloc)
+                            catch (Exception dbEx)
                             {
-                                DevDiag.Log("CtxBtn: FileNameAllocator failed for attachment, falling back: " + exAlloc.Message);
-
-                                string baseForThis;
-                                if (dlg.UseCustomFileName)
+                                // Detailed logging for NumeratorService failure in context-menu path
+                                try
                                 {
-                                    string baseClean = CleanFileName(dlg.CustomFileName);
-                                    baseForThis = (selCount == 1) ? baseClean : (baseClean + "_" + (i + 1));
+                                    DevDiag.Log("CtxBtn: NumeratorService failed, falling back: " + dbEx.ToString());
+                                    if (dbEx is System.Data.SqlClient.SqlException sqlEx)
+                                    {
+                                        for (int j = 0; j < sqlEx.Errors.Count; j++)
+                                            DevDiag.Log($"CtxBtn: SqlError[{j}] Number={sqlEx.Errors[j].Number} Proc={sqlEx.Errors[j].Procedure} Line={sqlEx.Errors[j].LineNumber} Msg={sqlEx.Errors[j].Message}");
+                                    }
                                 }
-                                else
-                                {
-                                    string baseName = System.IO.Path.GetFileNameWithoutExtension(rawName) ?? "attachment";
-                                    baseForThis = CleanFileName(baseName);
-                                    if (string.IsNullOrWhiteSpace(baseForThis)) baseForThis = "attachment";
-                                }
-
-                                filePath = GetUniquePath(System.IO.Path.Combine(categoryFolder, baseForThis + ext));
+                                catch { }
+                                // fallback to FileNameAllocator
+                                filePath = FileNameAllocator.AllocatePath(categoryFolder, ext, out allocated);
+                                DevDiag.Log($"CtxBtn: allocated numeric attachment name FS ol{allocated}{ext} (raw='{rawName}')");
                             }
 
                             DevDiag.Log($"CtxBtn: saving ATT. raw='{rawName}', path='{filePath}'");

@@ -2,7 +2,10 @@
 
 namespace BarOutlookAddIn.Helpers
 {
-    // Map one-letter system type code to a Hebrew description.
+    // Maps one-letter system type codes to a Hebrew description.
+    // Use EntityTypeCatalog.GetDescription(code) to convert a system type code ("ב", "פ", "ת", etc.)
+    // to its human-readable description. If code is unknown or null/empty the code itself or an empty
+    // string is returned (safe fallback).
     internal static class EntityTypeCatalog
     {
         private static readonly Dictionary<string, string> _map =

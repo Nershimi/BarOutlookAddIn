@@ -3,19 +3,19 @@ using System.IO;
 using System.Windows.Forms;
 using System.Collections.Generic;
 using BarOutlookAddIn.Helpers;
-// הסר את using BarOutlookAddIn.App_Code; כדי למנוע דו-משמעות אם יש גם שם AddInConfig
+// Removed `using BarOutlookAddIn.App_Code;` to avoid ambiguity if AddInConfig appears elsewhere.
 using Outlook = Microsoft.Office.Interop.Outlook;
 
 namespace BarOutlookAddIn
 {
     public partial class SaveEmailDialog : Form
     {
-        // ===== חדש: קונטקסט שמגיע מהריבון =====
+        // ===== Context passed from the ribbon =====
         private Outlook.MailItem _mailFromRibbon;
         private List<int> _preselectedAttachmentIndices = new List<int>();
         private List<string> _preselectedAttachmentFileNames = new List<string>();
 
-        // חשיפה לקריאה מבחוץ (לוגיקת השמירה יכולה להשתמש בזה)
+        // Exposed properties for external callers (saving logic uses these)
         public Outlook.MailItem Mail { get { return _mailFromRibbon; } set { _mailFromRibbon = value; } }
         public Outlook.MailItem MailItem { get { return _mailFromRibbon; } set { _mailFromRibbon = value; } }
         public bool UseCustomFileName => chkCustomFileName.Checked;
@@ -30,7 +30,7 @@ namespace BarOutlookAddIn
             }
         }
 
-        // שם נוסף כדי להתאים לשמות אפשריים בקוד חיצוני
+        // Alternative name kept for external compatibility
         public IReadOnlyList<int> SelectedAttachmentIndices
         {
             get { return _preselectedAttachmentIndices.AsReadOnly(); }
@@ -49,33 +49,32 @@ namespace BarOutlookAddIn
             }
         }
 
-        // enum שהריבון מצפה לו
+        // Enum the ribbon expects
         public enum SaveOption { None, SaveEmail, SaveAttachments, SaveAttachmentsOnly = SaveAttachments }
         public SaveOption SelectedOption { get; private set; } = SaveOption.None;
 
-        // קונפיג מ־XML (משתמש במימוש שב-Helpers)
+        // Configuration loaded from XML (implementation in Helpers.AddInConfig)
         private global::BarOutlookAddIn.Helpers.AddInConfig _config =
             new global::BarOutlookAddIn.Helpers.AddInConfig();
 
-        // Holds the entities loaded from DB for the combo
+        // Entities loaded from DB for the combo box
         private List<EntityInfo> _entities;
 
-        // Expose the selected entity object for DB insert
+        // Expose the selected EntityInfo for DB insert calls
         public EntityInfo SelectedEntityInfo
         {
             get { return comboBoxEntity != null ? comboBoxEntity.SelectedItem as EntityInfo : null; }
         }
 
-        // Convenience: name only (used sometimes by older code)
+        // Convenience: name only (keeps compatibility with older code)
         public string SelectedEntityName
         {
             get { return SelectedEntityInfo != null ? SelectedEntityInfo.Name : string.Empty; }
         }
 
-        // גישה אחידה לקומבו קטגוריה (בין comboBoxCategory ל-comboCategory אם נוצר alias ב-Designer)
+        // Unified access to category combo (handles possible designer alias)
         private ComboBox CategoryCombo
         {
-            // simplified and clearer null-coalescing (was using a cast expression)
             get { return comboBoxCategory ?? comboCategory; }
         }
 
@@ -89,13 +88,12 @@ namespace BarOutlookAddIn
             get { return txtRequestNumber != null ? txtRequestNumber.Text.Trim() : ""; }
         }
 
-        // ===== קונסטרקטור קיים (נשאר ללא שינוי פונקציונלי) =====
+        // ===== Constructor (functionality unchanged) =====
         public SaveEmailDialog()
         {
             DevDiag.Log("Dialog: ctor ENTER");
             InitializeComponent();
 
-            // עקוב אחרי שינוי ישות
             if (comboBoxEntity != null)
                 comboBoxEntity.SelectedIndexChanged += comboBoxEntity_SelectedIndexChanged;
 
@@ -116,7 +114,7 @@ namespace BarOutlookAddIn
             }
         }
 
-        // ===== חדש: קונסטרקטור עם Mail + אינדקסים של מצורפים =====
+        // Additional ctor that accepts MailItem and preselected attachment indices
         public SaveEmailDialog(Outlook.MailItem mail, IReadOnlyList<int> preselectedAttachmentIndices)
         {
             DevDiag.Log("Dialog: ctor(mail,indices) ENTER");
@@ -127,7 +125,6 @@ namespace BarOutlookAddIn
                 ? new List<int>(preselectedAttachmentIndices)
                 : new List<int>();
 
-            // עקוב אחרי שינוי ישות
             if (comboBoxEntity != null)
                 comboBoxEntity.SelectedIndexChanged += comboBoxEntity_SelectedIndexChanged;
 
@@ -148,7 +145,7 @@ namespace BarOutlookAddIn
             }
         }
 
-        // ===== חדש: מתודות עזר לידידותיות-רפלקשן (אם פותחים באמצעות ctor דיפולטי) =====
+        // Methods for setting context when using the default ctor
         public void SetContext(Outlook.MailItem mail, IReadOnlyList<int> indices)
         {
             _mailFromRibbon = mail;
@@ -173,7 +170,7 @@ namespace BarOutlookAddIn
             SetContext(mail, indices, fileNames);
         }
 
-        // ---------------- לוגיקה פנימית ----------------
+        // ---------------- Internal logic ----------------
 
         private void TryLoadConfigFromSavedPath()
         {
@@ -202,7 +199,7 @@ namespace BarOutlookAddIn
             }
         }
 
-        // ממלא את הקומבו של הקטגוריות (יישאר ריק אם אין ב-XML), בטוח לקומפילציה
+        // Fill categories combo (will be empty if XML has none). Safe for compilation.
         private void ApplyConfigToUI()
         {
             try
@@ -242,7 +239,7 @@ namespace BarOutlookAddIn
             }
         }
 
-        // קובע ישות ברירת מחדל מתוך ה-XML אם קיימת (ל-comboBoxEntity) — לפני טעינת DB (ייצור זמני)
+        // Set default entity to UI from XML before DB load (keeps compatibility)
         private void ApplyDefaultEntityToUI()
         {
             try
@@ -268,7 +265,8 @@ namespace BarOutlookAddIn
                 }
                 if (!found)
                 {
-                    // add a temporary EntityInfo item instead of raw string, so SelectedEntityInfo stays usable
+                    // add a temporary EntityInfo item instead of raw string,
+                    // so SelectedEntityInfo remains usable
                     var tmp = new EntityInfo
                     {
                         Name = defEntity,
@@ -328,9 +326,9 @@ namespace BarOutlookAddIn
             }
         }
 
-        // ---------------- Event Handlers (מחוברים מה-Designer) ----------------
+        // ---------------- Event Handlers (wired in Designer) ----------------
 
-        // כפתור: "שמור את המייל כולו"
+        // Button: "Save whole email"
         private void btnSaveEmail_Click(object sender, EventArgs e)
         {
             DevDiag.Log($"Dialog: btnSaveEmail_Click ENTER - UseCustom?={chkCustomFileName.Checked}, RawName='{txtCustomFileName.Text}'");
@@ -340,18 +338,18 @@ namespace BarOutlookAddIn
                 var raw = CustomFileName;
                 if (string.IsNullOrWhiteSpace(raw))
                 {
-                    MessageBox.Show("אנא הקלד שם קובץ.", "ולידציה", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show("Please enter a file name.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     DevDiag.Log("Dialog: validation fail - empty custom file name");
                     return;
                 }
 
-                // מסיר סיומת אם המשתמש כתב, ומנקה תווים אסורים
+                // Remove extension if provided and sanitize invalid characters
                 var baseName = System.IO.Path.GetFileNameWithoutExtension(raw);
                 baseName = CleanFileName(baseName);
 
                 if (string.IsNullOrWhiteSpace(baseName))
                 {
-                    MessageBox.Show("שם הקובץ שהוזן אינו תקין לאחר ניקוי. אנא נסה שם אחר.", "ולידציה", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show("The entered file name is invalid after sanitization. Try another name.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     DevDiag.Log("Dialog: sanitized name empty");
                     return;
                 }
@@ -376,7 +374,7 @@ namespace BarOutlookAddIn
             this.Close();
         }
 
-        // כפתור: "שמור רק קבצים מצורפים"
+        // Button: "Save attachments"
         private void btnSaveAttachments_Click(object sender, EventArgs e)
         {
             DevDiag.Log($"Dialog: btnSaveAttachments_Click ENTER - UseCustom?={chkCustomFileName.Checked}, RawName='{txtCustomFileName.Text}', preselectedCount={_preselectedAttachmentIndices?.Count ?? 0}");
@@ -386,18 +384,18 @@ namespace BarOutlookAddIn
                 var raw = CustomFileName;
                 if (string.IsNullOrWhiteSpace(raw))
                 {
-                    MessageBox.Show("אנא הקלד שם קובץ.", "ולידציה", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show("Please enter a file name.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     DevDiag.Log("Dialog: validation fail - empty custom file name (attachments)");
                     return;
                 }
 
-                // מסיר סיומת אם המשתמש כתב, ומנקה תווים אסורים
+                // Remove extension if provided and sanitize invalid characters
                 var baseName = System.IO.Path.GetFileNameWithoutExtension(raw);
                 baseName = CleanFileName(baseName);
 
                 if (string.IsNullOrWhiteSpace(baseName))
                 {
-                    MessageBox.Show("שם הקובץ שהוזן אינו תקין לאחר ניקוי. אנא נסה שם אחר.", "ולידציה", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show("The entered file name is invalid after sanitization. Try another name.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     DevDiag.Log("Dialog: sanitized name empty (attachments)");
                     return;
                 }
@@ -414,7 +412,7 @@ namespace BarOutlookAddIn
                 (ent != null ? (ent.Name + " | Def=" + ent.Definement + " | Sys=" + ent.SystemType) : "<null>") +
                 $" | preselectedCount={_preselectedAttachmentIndices?.Count ?? 0}");
 
-            SelectedOption = SaveOption.SaveAttachments; // תואם ללוגיקה בריבון (SaveAttachments / SaveAttachmentsOnly)
+            SelectedOption = SaveOption.SaveAttachments; // matches ribbon logic (SaveAttachments / SaveAttachmentsOnly)
             TryPersistLastCategory();
 
             DevDiag.Log($"Dialog: btnSaveAttachments_Click EXIT - SelectedOption={SelectedOption}, UseCustom?={chkCustomFileName.Checked}, FinalName='{txtCustomFileName.Text}'");
@@ -423,8 +421,7 @@ namespace BarOutlookAddIn
             this.Close();
         }
 
-
-        // כפתור: "ביטול"
+        // Cancel button
         private void btnCancel_Click(object sender, EventArgs e)
         {
             DevDiag.Log("Dialog: btnCancel_Click");
@@ -433,13 +430,13 @@ namespace BarOutlookAddIn
             this.Close();
         }
 
-        // כפתור: "טעינת הגדרות"
+        // Load settings button
         private void btnLoadSettings_Click(object sender, EventArgs e)
         {
             DevDiag.Log("Dialog: btnLoadSettings_Click ENTER");
             using (OpenFileDialog ofd = new OpenFileDialog())
             {
-                ofd.Title = "בחר/י קובץ הגדרות (XML)";
+                ofd.Title = "Select configuration file (XML)";
                 ofd.Filter = "XML Files (*.xml)|*.xml|All Files (*.*)|*.*";
                 ofd.CheckFileExists = true;
                 ofd.Multiselect = false;
@@ -469,7 +466,7 @@ namespace BarOutlookAddIn
 
                     Properties.Settings.Default.ConfigPath = ofd.FileName;
 
-                    // If the XML contains an archive path, keep SaveBaseFolder in settings (existing behavior)
+                    // If XML includes archive path, store it into SaveBaseFolder (existing behavior)
                     if (!string.IsNullOrWhiteSpace(newCfg.ArchivePath))
                     {
                         try
@@ -487,7 +484,7 @@ namespace BarOutlookAddIn
                         }
                     }
 
-                    // NEW: If XML contains SQL settings, build and persist a ConnectionString so DB calls work immediately
+                    // NEW: If XML includes SQL settings, build and persist a ConnectionString so DB calls work immediately
                     try
                     {
                         bool setConn = false;
@@ -526,7 +523,7 @@ namespace BarOutlookAddIn
                             }
                         }
 
-                        // Try to also persist server/db into individual settings used elsewhere (best-effort)
+                        // Also persist individual SQL settings used elsewhere (best-effort)
                         try
                         {
                             if (props != null)
@@ -562,14 +559,14 @@ namespace BarOutlookAddIn
                     UpdateFolderLabel();
 
                     DevDiag.Log("Dialog: btnLoadSettings EXIT OK");
-                    MessageBox.Show("ההגדרות נטענו ונשמרו בהצלחה.",
-                                    "טעינת הגדרות", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show("Settings loaded and saved successfully.",
+                                    "Load Settings", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
                 catch (Exception ex)
                 {
                     DevDiag.Log("Dialog: btnLoadSettings EX " + ex.Message);
-                    MessageBox.Show("שגיאה בטעינת הקובץ:\r\n" + ex.Message,
-                                    "טעינת הגדרות נכשלה",
+                    MessageBox.Show("Error loading file:\r\n" + ex.Message,
+                                    "Load settings failed",
                                     MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
@@ -602,8 +599,8 @@ namespace BarOutlookAddIn
                     folderPath = _config.ArchivePath;
 
                 this.lblFolderPath.Text = string.IsNullOrWhiteSpace(folderPath)
-                    ? "לא נבחר נתיב שמירה"
-                    : "נתיב שמירה: " + folderPath;
+                    ? "לא נבחר נתיב לשמירה"
+                    : "נתיב שמירה תקין";
 
                 DevDiag.Log("Dialog: UpdateFolderLabel -> '" + this.lblFolderPath.Text + "'");
             }
@@ -611,7 +608,7 @@ namespace BarOutlookAddIn
             {
                 DevDiag.Log("Dialog: UpdateFolderLabel EX " + ex.Message);
                 if (this.lblFolderPath != null)
-                    this.lblFolderPath.Text = "שגיאה בקריאת נתיב השמירה";
+                    this.lblFolderPath.Text = "תקלה בקריאת נתיב שמירה";
             }
         }
 
@@ -730,10 +727,9 @@ namespace BarOutlookAddIn
                 txtCustomFileName.Text = "";
         }
 
-        // עזר לסינון שם קובץ (אם אין כבר באחד הקבצים)
+        // Helper to sanitize file name (returns empty for blank input so caller treats it as invalid)
         private static string CleanFileName(string name)
         {
-            // return empty for blank input to let callers treat it as invalid
             if (string.IsNullOrWhiteSpace(name)) return string.Empty;
             foreach (char c in System.IO.Path.GetInvalidFileNameChars())
                 name = name.Replace(c, '_');
@@ -755,6 +751,16 @@ namespace BarOutlookAddIn
         }
 
         private void SaveEmailDialog_Load(object sender, EventArgs e)
+        {
+
+        }
+
+        private void txtCustomFileName_TextChanged(object sender, EventArgs e)
+        {
+
+        }
+
+        private void labelRequestNumber_Click(object sender, EventArgs e)
         {
 
         }

@@ -38,7 +38,7 @@ SELECT
 FROM dbo.System_Entity
 WHERE Code_Identification = N'ת'
   AND definement_entity_type > 0
-ORDER BY Name;";
+ORDER BY Definement, Name;";
 
                 conn.Open();
                 using (var r = cmd.ExecuteReader())

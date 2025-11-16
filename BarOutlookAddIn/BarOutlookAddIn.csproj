@@ -34,7 +34,7 @@
     <PublishUrl>C:\SavedEmails\</PublishUrl>
     <InstallUrl />
     <TargetCulture>en</TargetCulture>
-    <ApplicationVersion>1.0.0.29</ApplicationVersion>
+    <ApplicationVersion>1.0.0.30</ApplicationVersion>
     <AutoIncrementApplicationRevision>true</AutoIncrementApplicationRevision>
     <UpdateEnabled>true</UpdateEnabled>
     <UpdateInterval>7</UpdateInterval>
@@ -220,6 +220,7 @@
     </Compile>
     <Compile Include="helpers\AddInConfig.cs" />
     <Compile Include="helpers\ArchiveWriter.cs" />
+    <Compile Include="helpers\DbInspector.cs" />
     <Compile Include="helpers\DevDiag.cs" />
     <Compile Include="helpers\EntityInfo.cs" />
     <Compile Include="helpers\EntityTypeCatalog.cs" />

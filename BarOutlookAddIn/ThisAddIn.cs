@@ -1,8 +1,8 @@
 ﻿using System;
 using System.IO;
 using System.Xml.Linq;
+using System.Collections.Generic;
 using Office = Microsoft.Office.Core;
-
 
 namespace BarOutlookAddIn
 {
@@ -148,6 +148,61 @@ namespace BarOutlookAddIn
                 return cs;
             if (!cs.EndsWith(";")) cs += ";";
             return cs + "Application Name=BarOutlookAddIn;";
+        }
+
+        private void LogSpInsertArchiveSignature()
+        {
+            try
+            {
+                var settings = global::BarOutlookAddIn.Properties.Settings.Default;
+                var cs = settings.Properties != null && settings["ConnectionString"] != null
+                    ? settings["ConnectionString"] as string
+                    : null;
+
+                DevDiag.Log("DbInspector: checking SP_Insert_Archive. cs exists? " + (!string.IsNullOrWhiteSpace(cs)));
+
+                if (string.IsNullOrWhiteSpace(cs))
+                {
+                    DevDiag.Log("DbInspector: no __ConnectionString__ available.");
+                    return;
+                }
+
+                string proc = "dbo.SP_Insert_Archive";
+
+                // 1) existence
+                bool exists = Helpers.DbInspector.StoredProcedureExists(cs, proc);
+                DevDiag.Log("DbInspector: StoredProcedureExists(" + proc + ") = " + exists);
+
+                // 2) list actual parameters
+                var actual = Helpers.DbInspector.GetStoredProcedureParameters(cs, proc);
+                DevDiag.Log("DbInspector: actual parameters count = " + actual.Count);
+                for (int i = 0; i < actual.Count; i++)
+                    DevDiag.Log("DbInspector: param[" + (i + 1) + "] = " + actual[i]);
+
+                // 3) quick compare against expected signature
+                var expected = new List<string>
+                {
+                    "@Estate_Number bigint",
+                    "@entity_type char(1)",
+                    "@definement_entity_type int",
+                    "@Org_Entity_Number varchar(50)",
+                    "@File_Name varchar(300)",
+                    "@File_Location varchar(300)"
+                };
+
+                if (Helpers.DbInspector.MatchesExpectedSignature(cs, proc, expected, out string message))
+                {
+                    DevDiag.Log("DbInspector: Signature matches expected.");
+                }
+                else
+                {
+                    DevDiag.Log("DbInspector: Signature DOES NOT match. " + message);
+                }
+            }
+            catch (Exception ex)
+            {
+                DevDiag.Log("DbInspector: check EX " + ex.Message);
+            }
         }
 
         // ------- חשוב: InternalStartup חייב להיות כאן, באותו namespace, כדי ש-Designer יקרא לו -------

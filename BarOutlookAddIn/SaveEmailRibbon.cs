@@ -93,10 +93,30 @@ namespace BarOutlookAddIn
                         string fullPath;
                         try
                         {
-                            // Use filesystem allocator to get ol{N}.msg
+                            // Replace the .msg allocation block with DB-first allocator + log
                             int allocatedNumber;
-                            fullPath = FileNameAllocator.AllocatePath(categoryFolder, ".msg", out allocatedNumber);
-                            DevDiag.Log($"Ribbon: allocated numeric filename ol{allocatedNumber}.msg -> {fullPath} (base='{fileBase}')");
+                            try
+                            {
+                                // Try DB numerator first (atomic)
+                                allocatedNumber = NumeratorService.GetNextArchiveNumber();
+                                fullPath = Path.Combine(categoryFolder, "ol" + allocatedNumber + ".msg");
+                                DevDiag.Log($"Ribbon: allocated numeric filename from DB ol{allocatedNumber}.msg -> {fullPath} (base='{fileBase}')");
+                            }
+                            catch (Exception dbEx)
+                            {
+                                DevDiag.Log("Ribbon: NumeratorService failed for MSG, falling back to FileNameAllocator: " + dbEx.Message);
+                                try
+                                {
+                                    fullPath = FileNameAllocator.AllocatePath(categoryFolder, ".msg", out allocatedNumber);
+                                    DevDiag.Log($"Ribbon: allocated numeric filename FS ol{allocatedNumber}.msg -> {fullPath} (base='{fileBase}')");
+                                }
+                                catch (Exception exAlloc)
+                                {
+                                    DevDiag.Log("Ribbon: FileNameAllocator fallback failed: " + exAlloc.Message);
+                                    string initialPath = Path.Combine(categoryFolder, fileBase + ".msg");
+                                    fullPath = GetUniquePath(initialPath);
+                                }
+                            }
                         }
                         catch (Exception exAlloc)
                         {
@@ -172,22 +192,33 @@ namespace BarOutlookAddIn
                                 string ext = Path.GetExtension(rawName);
                                 if (string.IsNullOrWhiteSpace(ext)) ext = ".bin";
 
+                                int allocatedNumber;
                                 string filePath;
                                 try
                                 {
-                                    int allocatedNumber;
-                                    filePath = FileNameAllocator.AllocatePath(categoryFolder, ext, out allocatedNumber);
-                                    DevDiag.Log($"Ribbon: allocated numeric attachment name ol{allocatedNumber}{ext} (raw='{rawName}')");
+                                    // Try DB numerator first (atomic)
+                                    allocatedNumber = NumeratorService.GetNextArchiveNumber();
+                                    filePath = Path.Combine(categoryFolder, "ol" + allocatedNumber + ext);
+                                    DevDiag.Log($"Ribbon: allocated numeric attachment name from DB ol{allocatedNumber}{ext} (raw='{rawName}')");
                                 }
-                                catch (Exception exAlloc)
+                                catch (Exception dbEx)
                                 {
-                                    DevDiag.Log("Ribbon: FileNameAllocator failed for attachment, falling back: " + exAlloc.Message);
-                                    string baseForThis = dialog.UseCustomFileName
-                                        ? (selCount == 1 ? CleanFileName(dialog.CustomFileName) : CleanFileName(dialog.CustomFileName) + "_" + counter)
-                                        : CleanFileName(Path.GetFileNameWithoutExtension(rawName) ?? "attachment");
-                                    if (string.IsNullOrWhiteSpace(baseForThis)) baseForThis = "attachment";
-                                    string initialPath = Path.Combine(categoryFolder, baseForThis + ext);
-                                    filePath = GetUniquePath(initialPath);
+                                    DevDiag.Log("Ribbon: NumeratorService failed for attachment, falling back to FileNameAllocator: " + dbEx.Message);
+                                    try
+                                    {
+                                        filePath = FileNameAllocator.AllocatePath(categoryFolder, ext, out allocatedNumber);
+                                        DevDiag.Log($"Ribbon: allocated numeric attachment name FS ol{allocatedNumber}{ext} (raw='{rawName}')");
+                                    }
+                                    catch (Exception exAlloc)
+                                    {
+                                        DevDiag.Log("Ribbon: FileNameAllocator fallback failed for attachment: " + exAlloc.Message);
+                                        string baseForThis = dialog.UseCustomFileName
+                                            ? (selCount == 1 ? CleanFileName(dialog.CustomFileName) : CleanFileName(dialog.CustomFileName) + "_" + counter)
+                                            : CleanFileName(Path.GetFileNameWithoutExtension(rawName) ?? "attachment");
+                                        if (string.IsNullOrWhiteSpace(baseForThis)) baseForThis = "attachment";
+                                        string initialPath = Path.Combine(categoryFolder, baseForThis + ext);
+                                        filePath = GetUniquePath(initialPath);
+                                    }
                                 }
 
                                 DevDiag.Log($"Ribbon: saving ATT. raw='{rawName}', path='{filePath}'");
